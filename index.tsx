@@ -1,9 +1,12 @@
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 
-// Ensure process.env.API_KEY is available for the SDK in standalone environments
+/**
+ * BYOK (Bring Your Own Key) Support
+ * This shim ensures process.env.API_KEY is available even in environments 
+ * without build-time environment variable injection.
+ */
 if (typeof window !== 'undefined') {
   (window as any).process = (window as any).process || { env: {} };
   const savedKey = localStorage.getItem('user_gemini_key');
@@ -12,14 +15,21 @@ if (typeof window !== 'undefined') {
   }
 }
 
-const rootElement = document.getElementById('root');
-if (!rootElement) {
-  throw new Error("Could not find root element to mount to");
-}
+const mountApp = () => {
+  const rootElement = document.getElementById('root');
+  if (!rootElement) return;
 
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+  const root = ReactDOM.createRoot(rootElement);
+  root.render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+};
+
+// Ensure mounting happens after DOM content is loaded if script is not deferred
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', mountApp);
+} else {
+  mountApp();
+}
