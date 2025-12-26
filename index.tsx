@@ -1,18 +1,22 @@
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 
 /**
- * BYOK (Bring Your Own Key) Support
- * This shim ensures process.env.API_KEY is available even in environments 
+ * BYOK (Bring Your Own Key) Support Shim
+ * This ensures process.env.API_KEY is available even in environments 
  * without build-time environment variable injection.
  */
 if (typeof window !== 'undefined') {
-  (window as any).process = (window as any).process || { env: {} };
-  const savedKey = localStorage.getItem('user_gemini_key');
-  if (savedKey) {
-    (window as any).process.env.API_KEY = savedKey;
-  }
+  // Ensure process.env exists
+  (window as any).process = (window as any).process || {};
+  (window as any).process.env = (window as any).process.env || {};
+  
+  /**
+   * Guidelines: The application must not ask the user for the API key directly via input fields.
+   * Removing manual key population from localStorage.
+   */
 }
 
 const mountApp = () => {
@@ -27,7 +31,6 @@ const mountApp = () => {
   );
 };
 
-// Ensure mounting happens after DOM content is loaded if script is not deferred
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', mountApp);
 } else {

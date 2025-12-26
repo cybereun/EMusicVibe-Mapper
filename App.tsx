@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { DESTINATIONS, VIEWS, MOODS } from './constants';
 import { VibeOption, UserSelection, GeneratedResult, Step } from './types';
@@ -6,22 +7,28 @@ import SelectionCard from './components/SelectionCard';
 import ResultView from './components/ResultView';
 import { generateTitles, generateThumbnail, generateColorPalette, testConnection } from './services/geminiService';
 
+// Extend window for aistudio shim
+declare global {
+  interface Window {
+    aistudio: any;
+  }
+}
+
 const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<Step>('destination');
   const [selection, setSelection] = useState<UserSelection>({
     destination: null,
     view: null,
     mood: null,
-    aspectRatio: "16:9", // Default changed to 16:9
+    aspectRatio: "16:9",
   });
   const [result, setResult] = useState<GeneratedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customDestInput, setCustomDestInput] = useState("");
   
-  // BYOK States
+  // Settings States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [hasKey, setHasKey] = useState(false);
-  const [manualKey, setManualKey] = useState("");
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [testResult, setTestResult] = useState<{success?: boolean, message?: string} | null>(null);
 
@@ -29,45 +36,44 @@ const App: React.FC = () => {
     checkKey();
   }, []);
 
+  /**
+   * Guidelines: Use window.aistudio.hasSelectedApiKey() to check if an API key is selected.
+   */
   const checkKey = async () => {
     if (window.aistudio?.hasSelectedApiKey) {
       const selected = await window.aistudio.hasSelectedApiKey();
-      if (selected) {
-        setHasKey(true);
-        return;
-      }
-    }
-    const saved = localStorage.getItem('user_gemini_key');
-    if (saved) {
-      setManualKey(saved);
-      (window as any).process.env.API_KEY = saved;
+      setHasKey(selected);
+    } else if ((window as any).process?.env?.API_KEY) {
       setHasKey(true);
     }
   };
 
-  const handleSaveManualKey = () => {
-    if (!manualKey.trim()) return;
-    localStorage.setItem('user_gemini_key', manualKey.trim());
-    (window as any).process.env.API_KEY = manualKey.trim();
-    setHasKey(true);
-    setTestResult({ success: true, message: "Key saved locally." });
-  };
-
-  const handleOpenKeyPicker = async () => {
+  /**
+   * Guidelines: Add a button which calls window.aistudio.openSelectKey() to select a key.
+   */
+  const handleOpenKeyDialog = async () => {
     if (window.aistudio?.openSelectKey) {
       await window.aistudio.openSelectKey();
+      // Assume selection was successful after triggering to avoid race conditions as per guidelines
       setHasKey(true);
-    } else {
-      setIsSettingsOpen(true);
+      setTestResult({ success: true, message: "Key selection triggered." });
     }
   };
 
   const handleTestConnection = async () => {
+    if (!hasKey) return;
+    
     setIsTestingConn(true);
     setTestResult(null);
-    const res = await testConnection();
-    setTestResult(res);
-    setIsTestingConn(false);
+    try {
+      const res = await testConnection();
+      setTestResult(res);
+      if (res.success) setHasKey(true);
+    } catch (err: any) {
+      setTestResult({ success: false, message: "Connection failed. Check your network." });
+    } finally {
+      setIsTestingConn(false);
+    }
   };
 
   const handleSelection = (option: VibeOption) => {
@@ -81,23 +87,34 @@ const App: React.FC = () => {
     }
   };
 
+  /**
+   * Fix: Added missing handleCustomDestination function.
+   */
   const handleCustomDestination = () => {
     if (!customDestInput.trim()) return;
-    handleSelection({
-      id: `custom-dest-${Date.now()}`,
-      label: customDestInput,
-      keywords: [customDestInput, 'Custom'],
-      image: 'https://picsum.photos/200/200?grayscale'
-    });
+    const customOption: VibeOption = {
+      id: `custom-${Date.now()}`,
+      label: customDestInput.trim(),
+      keywords: [customDestInput.trim(), 'custom'],
+      image: `https://picsum.photos/seed/${customDestInput.trim()}/200/200`
+    };
+    handleSelection(customOption);
   };
 
   const handleGenerate = async () => {
     if (!selection.destination || !selection.view || !selection.mood) return;
-    if (!hasKey) {
+    
+    /**
+     * Guidelines: Re-check API key right before generating.
+     */
+    const isKeySelected = window.aistudio?.hasSelectedApiKey ? await window.aistudio.hasSelectedApiKey() : !!((window as any).process?.env?.API_KEY);
+    
+    if (!isKeySelected) {
       setIsSettingsOpen(true);
-      setError("Please set your Gemini API Key in Settings to continue.");
+      setError("Please select your Gemini API Key in Settings to continue.");
       return;
     }
+
     setCurrentStep('generating');
     setError(null);
     try {
@@ -105,6 +122,7 @@ const App: React.FC = () => {
       const titlesPromise = generateTitles(selection);
       const thumbnailPromise = generateThumbnail(selection, colors);
       const [titles, thumbnailData] = await Promise.all([titlesPromise, thumbnailPromise]);
+      
       setResult({
         titles,
         thumbnailUrl: thumbnailData.url,
@@ -114,7 +132,14 @@ const App: React.FC = () => {
       setCurrentStep('result');
     } catch (err: any) {
       console.error(err);
-      setError("Jazz frequency interrupted. Check your API key.");
+      /**
+       * Guidelines: If the request fails with "Requested entity was not found", reset the key selection state.
+       */
+      if (err.message?.includes("Requested entity was not found")) {
+        setHasKey(false);
+        setIsSettingsOpen(true);
+      }
+      setError("Jazz frequency interrupted. Check your API key or usage limits.");
       setCurrentStep('mood');
     }
   };
@@ -140,11 +165,11 @@ const App: React.FC = () => {
           </h1>
         </div>
         <div className="flex items-center space-x-4">
-          <div className={`hidden md:flex items-center space-x-2 px-3 py-1 rounded-full border ${hasKey ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400' : 'border-amber-500/20 bg-amber-500/5 text-amber-400'} text-[10px] font-bold uppercase tracking-widest`}>
+          <div className={`hidden md:flex items-center space-x-2 px-3 py-1 rounded-full border ${hasKey ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400' : 'border-amber-500/20 bg-amber-500/5 text-amber-400'} text-[10px] font-bold uppercase tracking-widest transition-colors duration-500`}>
             <span className={`w-1.5 h-1.5 rounded-full ${hasKey ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
             <span>{hasKey ? 'Engine Connected' : 'Setup Required'}</span>
           </div>
-          <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-slate-900/50 hover:bg-slate-800 rounded-xl transition-all border border-slate-800 text-slate-400 hover:text-white">
+          <button onClick={() => { setIsSettingsOpen(true); setTestResult(null); }} className="p-2 bg-slate-900/50 hover:bg-slate-800 rounded-xl transition-all border border-slate-800 text-slate-400 hover:text-white">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -153,31 +178,64 @@ const App: React.FC = () => {
         </div>
       </header>
 
+      {/* Settings Modal */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl p-8 shadow-2xl">
-            <div className="flex justify-between items-center mb-8">
-              <h2 className="text-xl font-bold serif text-white">Security & API Key</h2>
-              <button onClick={() => setIsSettingsOpen(false)} className="text-slate-500 hover:text-white transition-colors">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden">
+            <div className="flex justify-between items-center mb-8 relative z-10">
+              <h2 className="text-xl font-bold serif text-white">Engine Configuration</h2>
+              <button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-500 hover:text-white">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            <div className="space-y-6">
+            
+            <div className="space-y-6 relative z-10">
               <div className="space-y-3">
-                <label className="text-[10px] font-bold uppercase text-slate-500 tracking-widest">Manual API Key Entry</label>
-                <div className="flex space-x-2">
-                  <input type="password" value={manualKey} onChange={(e) => setManualKey(e.target.value)} placeholder="Enter Gemini API Key..." className="flex-grow bg-slate-950 border border-slate-800 rounded-2xl px-5 py-4 text-sm focus:ring-2 focus:ring-amber-500/50 outline-none text-slate-100" />
-                  <button onClick={handleSaveManualKey} className="bg-amber-500 text-slate-950 px-6 py-2 rounded-2xl text-xs font-bold hover:bg-amber-400 transition-all">Save</button>
+                <label className="text-[10px] font-black uppercase text-slate-500 tracking-[0.3em] flex justify-between">
+                  Gemini API Key
+                  <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-amber-500 hover:underline">Billing Docs</a>
+                </label>
+                <div className="flex flex-col space-y-4">
+                  <p className="text-xs text-slate-400">
+                    This application uses <strong>Gemini 3 Pro</strong> for art generation, which requires a paid API key selection.
+                  </p>
+                  <button 
+                    onClick={handleOpenKeyDialog} 
+                    className="bg-amber-500 text-slate-950 px-6 py-4 rounded-2xl text-sm font-black hover:bg-amber-400 transition-all active:scale-95 shadow-lg shadow-amber-500/20"
+                  >
+                    SELECT PAID API KEY
+                  </button>
                 </div>
               </div>
+
+              {testResult && (
+                <div className={`p-4 rounded-2xl text-xs font-medium border animate-fadeIn ${testResult.success ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+                   {testResult.message}
+                </div>
+              )}
+
               <div className="space-y-4 pt-6 border-t border-slate-800">
-                <button onClick={handleTestConnection} disabled={isTestingConn || !hasKey} className="w-full py-4 bg-white text-slate-950 hover:bg-slate-200 disabled:bg-slate-800 disabled:text-slate-600 rounded-2xl font-bold transition-all">
-                  {isTestingConn ? "Verifying..." : "Verify Connection"}
+                <button 
+                  onClick={handleTestConnection} 
+                  disabled={isTestingConn || !hasKey} 
+                  className="w-full py-4 bg-white text-slate-950 hover:bg-slate-200 disabled:bg-slate-800 disabled:text-slate-600 rounded-2xl font-black transition-all flex items-center justify-center space-x-2"
+                >
+                  {isTestingConn ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-slate-400 border-t-slate-950 rounded-full animate-spin"></div>
+                      <span>VERIFYING FREQUENCY...</span>
+                    </>
+                  ) : "TEST CONNECTION"}
                 </button>
+                <p className="text-[9px] text-center text-slate-600 uppercase tracking-widest leading-relaxed">
+                  Required for High-Resolution Art Generation via Gemini 3 Pro
+                </p>
               </div>
             </div>
+            
+            <div className="absolute -bottom-24 -right-24 w-64 h-64 bg-amber-500/5 blur-[100px] rounded-full pointer-events-none"></div>
           </div>
         </div>
       )}
@@ -186,13 +244,19 @@ const App: React.FC = () => {
         {currentStep !== 'result' && currentStep !== 'generating' && (
           <StepIndicator currentStep={currentStep === 'destination' ? 1 : currentStep === 'view' ? 2 : 3} />
         )}
-        {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-5 rounded-2xl mb-12 text-center animate-fadeIn">{error}</div>}
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-6 rounded-3xl mb-12 text-center animate-fadeIn flex flex-col items-center">
+            <span className="font-bold mb-1">Transmission Error</span>
+            <span className="text-sm opacity-80">{error}</span>
+            <button onClick={() => setIsSettingsOpen(true)} className="mt-4 text-xs font-black uppercase tracking-widest text-white underline underline-offset-4 decoration-red-500/50">Open Settings</button>
+          </div>
+        )}
 
         {currentStep === 'generating' ? (
           <div className="flex flex-col items-center justify-center min-h-[50vh] animate-fadeIn">
              <div className="w-20 h-20 rounded-full border-2 border-slate-800 border-t-amber-500 animate-spin mb-10"></div>
              <h2 className="text-3xl serif text-white mb-3">Synthesizing Artist Profile</h2>
-             <p className="text-slate-500 text-xs tracking-widest uppercase italic">Gemini 3 Pro Image Engine</p>
+             <p className="text-slate-500 text-xs tracking-widest uppercase italic">Gemini 3 Pro Image Engine • 1024x1024 px</p>
           </div>
         ) : currentStep === 'result' && result ? (
           <ResultView result={result} onReset={resetApp} aspectRatio={selection.aspectRatio} />
@@ -225,12 +289,11 @@ const App: React.FC = () => {
             <div className="mt-20 flex flex-col items-center space-y-8 sticky bottom-10 z-20">
                {selection.destination && selection.view && selection.mood ? (
                  <>
-                   {/* Aspect Ratio Selector */}
                    <div className="flex bg-slate-900/80 backdrop-blur-xl border border-slate-800 p-1.5 rounded-2xl shadow-2xl">
                      {[
-                       { id: '16:9', label: '16:9', desc: 'Wide' },
-                       { id: '1:1', label: '1:1', desc: 'Square' },
-                       { id: '9:16', label: '9:16', desc: 'Story' }
+                       { id: '16:9', label: '16:9' },
+                       { id: '1:1', label: '1:1' },
+                       { id: '9:16', label: '9:16' }
                      ].map((ratio) => (
                        <button
                          key={ratio.id}
@@ -265,7 +328,7 @@ const App: React.FC = () => {
         )}
       </main>
       <footer className="py-12 text-center text-slate-700 text-[9px] uppercase tracking-[0.4em] border-t border-slate-900">
-        <p>© 2024 E-MusicVibe Architecture • Powered by Google Gemini</p>
+        <p>© 2024 E-MusicVibe Architecture • Ticketless Travel Initiative</p>
       </footer>
     </div>
   );

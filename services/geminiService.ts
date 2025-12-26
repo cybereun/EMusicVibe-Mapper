@@ -2,20 +2,30 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { UserSelection } from "../types";
 
-// Note: GoogleGenAI is instantiated inside functions to ensure the latest API key from the environment is used.
+/**
+ * Helper to get key directly from shimmed process.env.
+ * Guidelines: Use process.env.API_KEY directly.
+ */
+const getApiKey = () => {
+  return (window as any).process?.env?.API_KEY || "";
+};
 
 // Connection Test Utility
 export const testConnection = async (): Promise<{ success: boolean; message: string }> => {
+  const apiKey = getApiKey();
+  if (!apiKey) return { success: false, message: "API Key is missing." };
+
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: "ping",
     });
+    // Guidelines: Use .text property, not .text()
     return { success: !!response.text, message: "Connection stable. Jazz frequencies are clear." };
   } catch (error: any) {
     console.error("Connection test failed:", error);
-    return { success: false, message: error.message || "Failed to establish connection." };
+    return { success: false, message: error.message || "Invalid API Key or server error." };
   }
 };
 
@@ -23,7 +33,8 @@ export const testConnection = async (): Promise<{ success: boolean; message: str
 export const generateTitles = async (selection: UserSelection): Promise<string[]> => {
   if (!selection.destination || !selection.view || !selection.mood) throw new Error("Incomplete selection");
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = `
     You are a jazz channel copywriter for a "Ticketless Travel" concept app.
     Context:
@@ -69,7 +80,8 @@ export const generateTitles = async (selection: UserSelection): Promise<string[]
 
 // 2. Jazz Tone Analyzer
 export const generateColorPalette = async (mood: string): Promise<string[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = `
     Analyze the jazz genre: "${mood}".
     Suggest a color palette of 3 colors (Hex codes) for cover art.
@@ -102,8 +114,9 @@ export const generateColorPalette = async (mood: string): Promise<string[]> => {
 
 // 3. Thumbnail Generator (Upgraded to Gemini 3 Pro Image)
 export const generateThumbnail = async (selection: UserSelection, colors: string[]): Promise<{ url: string, prompt: string }> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const aspectRatio = selection.aspectRatio || "1:1";
+  const apiKey = getApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+  const aspectRatio = selection.aspectRatio || "16:9";
   
   const optimizedPrompt = `A high-quality, cinematic jazz playlist cover. Scene: A ${selection.view.label} in ${selection.destination.label}. Musical Mood: ${selection.mood.label} jazz. Aesthetic: Moody, atmospheric, professional photography, lighting inspired by colors ${colors.join(', ')}. No text, no logos.`;
 
@@ -122,6 +135,7 @@ export const generateThumbnail = async (selection: UserSelection, colors: string
     });
 
     let imageUrl = '';
+    // Guidelines: Iterate through parts to find the image data.
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) {
         imageUrl = `data:image/png;base64,${part.inlineData.data}`;
