@@ -13,10 +13,7 @@ if (typeof window !== 'undefined') {
   (window as any).process = (window as any).process || {};
   (window as any).process.env = (window as any).process.env || {};
   
-  /**
-   * Guidelines: The application must not ask the user for the API key directly via input fields.
-   * Removing manual key population from localStorage.
-   */
+  // Try to preserve pre-existing build-time env vars if they exist
 }
 
 const mountApp = () => {

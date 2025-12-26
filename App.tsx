@@ -7,10 +7,18 @@ import SelectionCard from './components/SelectionCard';
 import ResultView from './components/ResultView';
 import { generateTitles, generateThumbnail, generateColorPalette, testConnection } from './services/geminiService';
 
-// Extend window for aistudio shim
+/**
+ * AIStudio interface for the global window object.
+ * This resolves the conflict with platform-provided types by defining the expected structure.
+ */
+interface AIStudio {
+  hasSelectedApiKey: () => Promise<boolean>;
+  openSelectKey: () => Promise<void>;
+}
+
 declare global {
   interface Window {
-    aistudio: any;
+    aistudio: AIStudio;
   }
 }
 
@@ -29,6 +37,7 @@ const App: React.FC = () => {
   // Settings States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [hasKey, setHasKey] = useState(false);
+  const [isAiStudio, setIsAiStudio] = useState(false);
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [testResult, setTestResult] = useState<{success?: boolean, message?: string} | null>(null);
 
@@ -37,31 +46,48 @@ const App: React.FC = () => {
   }, []);
 
   /**
-   * Guidelines: Use window.aistudio.hasSelectedApiKey() to check if an API key is selected.
+   * Detect if we are inside Google AI Studio or running standalone (e.g., Vercel)
    */
   const checkKey = async () => {
-    if (window.aistudio?.hasSelectedApiKey) {
+    const aiStudioPresent = !!(window.aistudio && window.aistudio.openSelectKey);
+    setIsAiStudio(aiStudioPresent);
+
+    if (aiStudioPresent) {
       const selected = await window.aistudio.hasSelectedApiKey();
       setHasKey(selected);
-    } else if ((window as any).process?.env?.API_KEY) {
-      setHasKey(true);
+    } else {
+      // Standalone mode: Check if API_KEY is provided via environment variables
+      const envKey = (window as any).process?.env?.API_KEY;
+      setHasKey(!!envKey && envKey.length > 5);
     }
   };
 
   /**
-   * Guidelines: Add a button which calls window.aistudio.openSelectKey() to select a key.
+   * Only works inside AI Studio. Standalone users must set env vars.
    */
   const handleOpenKeyDialog = async () => {
     if (window.aistudio?.openSelectKey) {
-      await window.aistudio.openSelectKey();
-      // Assume selection was successful after triggering to avoid race conditions as per guidelines
-      setHasKey(true);
-      setTestResult({ success: true, message: "Key selection triggered." });
+      try {
+        await window.aistudio.openSelectKey();
+        setHasKey(true);
+        setTestResult({ success: true, message: "Key selected from AI Studio." });
+      } catch (e) {
+        console.error("AI Studio key picker failed", e);
+      }
+    } else {
+      setTestResult({ 
+        success: false, 
+        message: "Key Picker is only available inside Google AI Studio. Please set API_KEY in Vercel Environment Variables." 
+      });
     }
   };
 
   const handleTestConnection = async () => {
-    if (!hasKey) return;
+    const isKeyPresent = (window as any).process?.env?.API_KEY || (window.aistudio && await window.aistudio.hasSelectedApiKey());
+    if (!isKeyPresent) {
+      setTestResult({ success: false, message: "No API Key detected. Set it in Vercel settings." });
+      return;
+    }
     
     setIsTestingConn(true);
     setTestResult(null);
@@ -70,7 +96,7 @@ const App: React.FC = () => {
       setTestResult(res);
       if (res.success) setHasKey(true);
     } catch (err: any) {
-      setTestResult({ success: false, message: "Connection failed. Check your network." });
+      setTestResult({ success: false, message: "Connection failed. Check your API key type (Paid project required for Gemini 3)." });
     } finally {
       setIsTestingConn(false);
     }
@@ -87,9 +113,6 @@ const App: React.FC = () => {
     }
   };
 
-  /**
-   * Fix: Added missing handleCustomDestination function.
-   */
   const handleCustomDestination = () => {
     if (!customDestInput.trim()) return;
     const customOption: VibeOption = {
@@ -104,14 +127,13 @@ const App: React.FC = () => {
   const handleGenerate = async () => {
     if (!selection.destination || !selection.view || !selection.mood) return;
     
-    /**
-     * Guidelines: Re-check API key right before generating.
-     */
-    const isKeySelected = window.aistudio?.hasSelectedApiKey ? await window.aistudio.hasSelectedApiKey() : !!((window as any).process?.env?.API_KEY);
+    const isKeySelected = isAiStudio 
+      ? await window.aistudio.hasSelectedApiKey() 
+      : !!((window as any).process?.env?.API_KEY);
     
     if (!isKeySelected) {
       setIsSettingsOpen(true);
-      setError("Please select your Gemini API Key in Settings to continue.");
+      setError("Please set your Gemini API Key to continue art generation.");
       return;
     }
 
@@ -132,14 +154,13 @@ const App: React.FC = () => {
       setCurrentStep('result');
     } catch (err: any) {
       console.error(err);
-      /**
-       * Guidelines: If the request fails with "Requested entity was not found", reset the key selection state.
-       */
       if (err.message?.includes("Requested entity was not found")) {
         setHasKey(false);
         setIsSettingsOpen(true);
+        setError("Key needs to be from a Paid GCP Project for Gemini 3 Pro.");
+      } else {
+        setError("Generation failed. High-resolution art requires a valid Paid API Key.");
       }
-      setError("Jazz frequency interrupted. Check your API key or usage limits.");
       setCurrentStep('mood');
     }
   };
@@ -167,7 +188,7 @@ const App: React.FC = () => {
         <div className="flex items-center space-x-4">
           <div className={`hidden md:flex items-center space-x-2 px-3 py-1 rounded-full border ${hasKey ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400' : 'border-amber-500/20 bg-amber-500/5 text-amber-400'} text-[10px] font-bold uppercase tracking-widest transition-colors duration-500`}>
             <span className={`w-1.5 h-1.5 rounded-full ${hasKey ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
-            <span>{hasKey ? 'Engine Connected' : 'Setup Required'}</span>
+            <span>{hasKey ? 'Engine Connected' : 'Key Required'}</span>
           </div>
           <button onClick={() => { setIsSettingsOpen(true); setTestResult(null); }} className="p-2 bg-slate-900/50 hover:bg-slate-800 rounded-xl transition-all border border-slate-800 text-slate-400 hover:text-white">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -198,15 +219,37 @@ const App: React.FC = () => {
                   <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-amber-500 hover:underline">Billing Docs</a>
                 </label>
                 <div className="flex flex-col space-y-4">
-                  <p className="text-xs text-slate-400">
-                    This application uses <strong>Gemini 3 Pro</strong> for art generation, which requires a paid API key selection.
-                  </p>
-                  <button 
-                    onClick={handleOpenKeyDialog} 
-                    className="bg-amber-500 text-slate-950 px-6 py-4 rounded-2xl text-sm font-black hover:bg-amber-400 transition-all active:scale-95 shadow-lg shadow-amber-500/20"
-                  >
-                    SELECT PAID API KEY
-                  </button>
+                  {isAiStudio ? (
+                    <>
+                      <p className="text-xs text-slate-400">
+                        Inside AI Studio: Select a paid project key to enable high-resolution art.
+                      </p>
+                      <button 
+                        onClick={handleOpenKeyDialog} 
+                        className="bg-amber-500 text-slate-950 px-6 py-4 rounded-2xl text-sm font-black hover:bg-amber-400 transition-all active:scale-95 shadow-lg shadow-amber-500/20"
+                      >
+                        SELECT PAID API KEY
+                      </button>
+                    </>
+                  ) : (
+                    <div className="bg-slate-950/50 p-5 rounded-2xl border border-slate-800">
+                       <p className="text-xs text-slate-300 font-medium mb-3">Standalone Mode (Vercel)</p>
+                       <p className="text-[11px] text-slate-500 leading-relaxed mb-4">
+                         The key picker is only available inside Google AI Studio. 
+                         <br/><br/>
+                         To use this app on Vercel, add an environment variable named <code className="text-amber-500 font-bold">API_KEY</code> in your Vercel Project Settings.
+                       </p>
+                       {hasKey ? (
+                         <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest bg-emerald-500/5 p-2 rounded-lg text-center border border-emerald-500/10">
+                           ✓ Key detected in environment
+                         </div>
+                       ) : (
+                         <div className="text-[10px] text-amber-500/70 font-bold uppercase tracking-widest p-2 text-center italic">
+                           Waiting for environment variable...
+                         </div>
+                       )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -219,19 +262,16 @@ const App: React.FC = () => {
               <div className="space-y-4 pt-6 border-t border-slate-800">
                 <button 
                   onClick={handleTestConnection} 
-                  disabled={isTestingConn || !hasKey} 
+                  disabled={isTestingConn || (!isAiStudio && !hasKey)} 
                   className="w-full py-4 bg-white text-slate-950 hover:bg-slate-200 disabled:bg-slate-800 disabled:text-slate-600 rounded-2xl font-black transition-all flex items-center justify-center space-x-2"
                 >
                   {isTestingConn ? (
                     <>
                       <div className="w-4 h-4 border-2 border-slate-400 border-t-slate-950 rounded-full animate-spin"></div>
-                      <span>VERIFYING FREQUENCY...</span>
+                      <span>VERIFYING CONNECTION...</span>
                     </>
                   ) : "TEST CONNECTION"}
                 </button>
-                <p className="text-[9px] text-center text-slate-600 uppercase tracking-widest leading-relaxed">
-                  Required for High-Resolution Art Generation via Gemini 3 Pro
-                </p>
               </div>
             </div>
             
